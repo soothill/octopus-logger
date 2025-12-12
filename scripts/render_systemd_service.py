@@ -73,10 +73,9 @@ def main() -> None:
     default_python_executable = str(repo_root / ".venv" / "bin" / "python")
     default_main_path = str(repo_root / "src" / "main.py")
     default_user = getpass.getuser()
-    default_read_write_paths = [
-        str(repo_root / "cache"),
-        str(repo_root / "octopus_logger.log"),
-    ]
+    # Use the repo directory itself for ReadWritePaths (always exists).
+    # This allows cache/ and log file to be created at runtime.
+    default_read_write_paths = [str(repo_root)]
 
     mapping = {
         "working_directory": str(_get(sysd, "working_directory", default_working_directory)),

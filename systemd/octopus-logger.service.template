@@ -15,11 +15,11 @@ Environment="PYTHONUNBUFFERED=1"
 Restart=on-failure
 RestartSec=10
 
-# Hardening (adjust if you hit permission issues)
+# Hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 
 # Allow writes only where needed
 ReadWritePaths={{read_write_paths}}

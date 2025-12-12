@@ -69,8 +69,7 @@ debug: false
 #   main_path: "/path/to/octopus-logger/src/main.py"
 #   user: "your_username"
 #   read_write_paths:
-#     - "/path/to/octopus-logger/cache"
-#     - "/path/to/octopus-logger/octopus_logger.log"
+#     - "/path/to/octopus-logger"   # directory must exist; allows writes to cache/ and log
 ```
 
 **Notes:**
