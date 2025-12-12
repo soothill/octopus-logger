@@ -1,0 +1,28 @@
+[Unit]
+Description=Octopus Logger Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{working_directory}}
+ExecStart={{python_executable}} {{main_path}}
+
+User={{user}}
+Environment="PYTHONUNBUFFERED=1"
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Hardening (adjust if you hit permission issues)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+# Allow writes only where needed
+ReadWritePaths={{read_write_paths}}
+
+[Install]
+WantedBy=multi-user.target

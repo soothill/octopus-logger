@@ -58,6 +58,16 @@ max_cache_size: 10000
 
 # Enable debug logging (default false)
 debug: false
+
+# systemd service rendering (used during `make install`)
+systemd:
+  working_directory: "/home/darren/octopus-logger"
+  python_executable: "/home/darren/octopus-logger/.venv/bin/python"
+  main_path: "/home/darren/octopus-logger/src/main.py"
+  user: "darren"
+  read_write_paths:
+    - "/home/darren/octopus-logger/cache"
+    - "/home/darren/octopus-logger/octopus_logger.log"
 ```
 
 **Notes:**
@@ -76,6 +86,7 @@ make install
 This will:
 - Create a virtualenv (`.venv`)
 - Install dependencies
+- Render `systemd/octopus-logger.service` from `config/config.yaml`
 - Copy the systemd service file
 - Enable and start the service
 

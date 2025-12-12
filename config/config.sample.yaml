@@ -19,3 +19,14 @@ max_cache_size: 10000
 
 # Enable debug logging (default false)
 debug: false
+
+# systemd service rendering (used by scripts/render_systemd_service.py)
+# This makes paths easy to customize per-machine.
+systemd:
+  working_directory: "/home/darren/octopus-logger"
+  python_executable: "/home/darren/octopus-logger/.venv/bin/python"
+  main_path: "/home/darren/octopus-logger/src/main.py"
+  user: "darren"
+  read_write_paths:
+    - "/home/darren/octopus-logger/cache"
+    - "/home/darren/octopus-logger/octopus_logger.log"
