@@ -5,7 +5,7 @@ SERVICE_RENDERER=scripts/render_systemd_service.py
 INSTALL_PATH=/etc/systemd/system/$(APP_NAME).service
 PYTHON=python3
 
-.PHONY: install uninstall start stop test render-service help
+.PHONY: install uninstall start stop status test render-service help
 
 render-service:
 	@echo "Rendering systemd service from config/config.yaml..."
@@ -37,6 +37,9 @@ start:
 stop:
 	sudo systemctl stop $(APP_NAME)
 
+status:
+	@systemctl status $(APP_NAME) --no-pager || true
+
 test:
 	@echo "Validating configuration..."
 	@if [ ! -f config/config.yaml ]; then echo "Error: config/config.yaml not found."; exit 1; fi
@@ -60,5 +63,6 @@ help:
 	@echo "  make uninstall       - Stop and remove the systemd service"
 	@echo "  make start           - Start the systemd service"
 	@echo "  make stop            - Stop the systemd service"
+	@echo "  make status          - Show systemd service status"
 	@echo "  make test            - Run the logger once for testing"
 	@echo "  make help            - Show this help message"
