@@ -1,6 +1,7 @@
 import sys
 import os
 import asyncio
+import logging
 import aiohttp
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -15,6 +16,12 @@ from src.main import (
 
 
 async def run_test():
+    # Enable debug logging for test runs
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+    
     print("Loading configuration...")
     config = load_config()
 
@@ -23,24 +30,27 @@ async def run_test():
 
     print("Starting async test run...")
 
-    async with aiohttp.ClientSession() as session:
+    # Configure connection pooling for aiohttp
+    connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
+    
+    async with aiohttp.ClientSession(connector=connector) as session:
         # Acquire token
         print("Obtaining Kraken token...")
-        token = await obtain_token(session, api_key, debug=True)
+        token = await obtain_token(session, api_key)
 
         # Find Home Mini device ID
         print("Fetching Home Mini device ID...")
-        device_id = await find_home_mini_device_id(session, account_number, token, debug=True)
+        device_id = await find_home_mini_device_id(session, account_number, token)
 
         # Fetch rate limit info (helps catch schema mismatches early)
         print("Fetching rate limit info...")
-        rate_limit = await fetch_rate_limit_info(session, token, debug=True)
+        rate_limit = await fetch_rate_limit_info(session, token)
         pa = (rate_limit or {}).get("pointsAllowanceRateLimit") or {}
         print("Rate limit points allowance:", pa)
 
         # Fetch a single telemetry sample
         print(f"Fetching single telemetry reading for device {device_id}...")
-        reading = await fetch_telemetry(session, device_id, token, debug=True)
+        reading = await fetch_telemetry(session, device_id, token)
 
         if reading:
             print("Success! Sample reading:")

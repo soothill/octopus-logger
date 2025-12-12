@@ -1,16 +1,21 @@
 import asyncio
+import signal
 import aiohttp
 import json
 import yaml
 import logging
 from logging.handlers import RotatingFileHandler
 from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "config.yaml"
 CACHE_PATH = Path(__file__).parent.parent / "cache" / "pending_readings.json"
 GRAPHQL_URL = "https://api.octopus.energy/v1/graphql/"
+
+# Graceful shutdown event
+shutdown_event = asyncio.Event()
 
 ############################################################
 # CONFIG + CACHE
@@ -28,15 +33,19 @@ def load_cache():
             return []
     return []
 
-def save_cache(cache):
+def save_cache(cache, max_size=10000):
+    """Save readings to cache, truncating to max_size if needed."""
     CACHE_PATH.parent.mkdir(exist_ok=True, parents=True)
+    # Keep only the most recent readings if over max_size
+    if len(cache) > max_size:
+        cache = cache[-max_size:]
     CACHE_PATH.write_text(json.dumps(cache))
 
 ############################################################
 # ASYNC GRAPHQL CLIENT
 ############################################################
 
-async def graphql_request(session, query, variables=None, token=None, debug=False):
+async def graphql_request(session, query, variables=None, token=None):
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"JWT {token}"
@@ -45,22 +54,19 @@ async def graphql_request(session, query, variables=None, token=None, debug=Fals
     if variables:
         payload["variables"] = variables
 
-    if debug:
-        logging.debug(f"GraphQL Payload: {payload}")
+    logging.debug("GraphQL Payload: %s", payload)
 
     async with session.post(GRAPHQL_URL, json=payload, headers=headers) as resp:
-        text = await resp.text()
-
-        if debug:
-            logging.debug(f"GraphQL HTTP Status: {resp.status}")
-            logging.debug(f"GraphQL Raw Response: {text}")
+        logging.debug("GraphQL HTTP Status: %s", resp.status)
 
         if resp.status >= 400:
-            print("GRAPHQL RAW ERROR RESPONSE:")
-            print(text)
+            text = await resp.text()
+            logging.error("GraphQL error response: %s", text)
+            resp.raise_for_status()
 
-        resp.raise_for_status()
-        data = json.loads(text)
+        data = await resp.json()
+
+        logging.debug("GraphQL Response: %s", data)
 
         if "errors" in data:
             raise RuntimeError(f"GraphQL error(s): {data['errors']}")
@@ -71,7 +77,7 @@ async def graphql_request(session, query, variables=None, token=None, debug=Fals
 # TOKEN + DEVICE ID
 ############################################################
 
-async def obtain_token(session, api_key, debug=False):
+async def obtain_token(session, api_key):
     query = """
     mutation ObtainToken($apiKey: String!) {
       obtainKrakenToken(input: { APIKey: $apiKey }) {
@@ -79,13 +85,12 @@ async def obtain_token(session, api_key, debug=False):
       }
     }
     """
-    data = await graphql_request(session, query, {"apiKey": api_key}, debug=debug)
+    data = await graphql_request(session, query, {"apiKey": api_key})
     token = data["obtainKrakenToken"]["token"]
-    if debug:
-        logging.debug(f"Obtained token: {token}")
+    logging.debug("Obtained token: %s...", token[:20] if token else "None")
     return token
 
-async def find_home_mini_device_id(session, account_number, token, debug=False):
+async def find_home_mini_device_id(session, account_number, token):
     query = """
     query HomeMiniDevice($accountNumber: String!) {
       account(accountNumber: $accountNumber) {
@@ -101,7 +106,7 @@ async def find_home_mini_device_id(session, account_number, token, debug=False):
       }
     }
     """
-    data = await graphql_request(session, query, {"accountNumber": account_number}, token, debug)
+    data = await graphql_request(session, query, {"accountNumber": account_number}, token)
     account = data.get("account")
     if not account:
         raise RuntimeError("Account not found")
@@ -111,8 +116,7 @@ async def find_home_mini_device_id(session, account_number, token, debug=False):
         for meter in mp.get("meters", []):
             for dev in meter.get("smartDevices", []):
                 if dev.get("deviceId"):
-                    if debug:
-                        logging.debug(f"Found Home Mini deviceId: {dev['deviceId']}")
+                    logging.debug("Found Home Mini deviceId: %s", dev['deviceId'])
                     return dev["deviceId"]
 
     raise RuntimeError("No smart meter deviceId found")
@@ -121,7 +125,7 @@ async def find_home_mini_device_id(session, account_number, token, debug=False):
 # ASYNC TELEMETRY
 ############################################################
 
-async def fetch_telemetry(session, device_id, token, debug=False):
+async def fetch_telemetry(session, device_id, token):
     now = datetime.now(timezone.utc)
     start = now - timedelta(seconds=300)
 
@@ -147,26 +151,20 @@ async def fetch_telemetry(session, device_id, token, debug=False):
         "end": now.isoformat(),
     }
 
-    data = await graphql_request(session, query, variables, token, debug)
+    data = await graphql_request(session, query, variables, token)
     pts = data.get("smartMeterTelemetry") or []
     if not pts:
         return None
 
-    pts = sorted(pts, key=lambda x: x["readAt"])
-    latest = pts[-1]
+    # Use max() instead of sorting - O(n) vs O(n log n)
+    latest = max(pts, key=lambda x: x["readAt"])
     return {"timestamp": latest["readAt"], "value": latest["demand"]}
 
 ############################################################
 # ASYNC RATE LIMIT INFO
 ############################################################
 
-async def fetch_rate_limit_info(session, token, debug=False):
-    # Octopus GraphQL schema (as of Dec 2025):
-    # rateLimitInfo: CombinedRateLimitInformation
-    # - pointsAllowanceRateLimit: PointsAllowanceRateLimitInformation
-    #     limit, remainingPoints, usedPoints, ttl, isBlocked
-    # - fieldSpecificRateLimits: FieldSpecificRateLimitInformationConnection
-    #     edges { node { field, rate, ttl, isBlocked } }
+async def fetch_rate_limit_info(session, token):
     query = """
     query RateLimitInfo {
       rateLimitInfo {
@@ -177,7 +175,6 @@ async def fetch_rate_limit_info(session, token, debug=False):
           ttl
           isBlocked
         }
-        # This field is a connection and requires pagination arguments.
         fieldSpecificRateLimits(first: 50) {
           edges {
             node {
@@ -192,27 +189,51 @@ async def fetch_rate_limit_info(session, token, debug=False):
     }
     """
 
-    data = await graphql_request(session, query, None, token, debug)
+    data = await graphql_request(session, query, None, token)
     return data["rateLimitInfo"]
 
+def log_rate_limit(rate_limit):
+    """Helper to log rate limit info consistently."""
+    pa = (rate_limit or {}).get("pointsAllowanceRateLimit") or {}
+    logging.info(
+        "Rate Limit Summary: PA remainingPoints=%s usedPoints=%s limit=%s ttl=%s isBlocked=%s",
+        pa.get("remainingPoints"),
+        pa.get("usedPoints"),
+        pa.get("limit"),
+        pa.get("ttl"),
+        pa.get("isBlocked"),
+    )
+
 ############################################################
-# ASYNC INFLUX WRITE (sync wrapped)
+# INFLUX WRITE (using reusable WriteApi)
 ############################################################
 
-async def write_influx(client, org, bucket, reading):
-    def _write():
-        point = (
-            Point("power")
-            .field("value", reading["value"])
-            .time(reading["timestamp"], WritePrecision.S)
-        )
-        client.write_api().write(bucket=bucket, org=org, record=point)
+def write_influx_sync(write_api, org, bucket, reading):
+    """Synchronous InfluxDB write using pre-created WriteApi."""
+    point = (
+        Point("power")
+        .field("value", reading["value"])
+        .time(reading["timestamp"], WritePrecision.S)
+    )
+    write_api.write(bucket=bucket, org=org, record=point)
 
-    await asyncio.to_thread(_write)
+async def write_influx(write_api, org, bucket, reading):
+    """Async wrapper for InfluxDB write."""
+    await asyncio.to_thread(write_influx_sync, write_api, org, bucket, reading)
 
 ############################################################
 # ASYNC MAIN LOOP
 ############################################################
+
+def setup_signal_handlers():
+    """Setup graceful shutdown handlers for SIGTERM and SIGINT."""
+    def handle_shutdown(signum, frame):
+        signame = signal.Signals(signum).name
+        logging.info("Received %s, initiating graceful shutdown...", signame)
+        shutdown_event.set()
+    
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
 
 async def main():
     config = load_config()
@@ -224,6 +245,7 @@ async def main():
     influx_bucket = config["influxdb"]["bucket"]
     interval = config.get("poll_interval", 10)
     debug = config.get("debug", False)
+    max_cache_size = config.get("max_cache_size", 10000)
 
     log_path = Path(__file__).parent.parent / "octopus_logger.log"
     file_handler = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3)
@@ -234,58 +256,121 @@ async def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    # Suppress extremely chatty dependency loggers when running with debug enabled.
-    # In particular, influxdb-client depends on reactivex which logs
-    # `timeout: <seconds>` at DEBUG level on logger name "Rx".
+    # Suppress chatty dependency loggers
     logging.getLogger("Rx").setLevel(logging.WARNING)
+
+    # Setup signal handlers for graceful shutdown
+    setup_signal_handlers()
 
     logging.info("Starting async Octopus Logger...")
 
-    async with aiohttp.ClientSession() as session:
-        token = await obtain_token(session, api_key, debug)
-        device_id = await find_home_mini_device_id(session, account_number, token, debug)
-        logging.info(f"Using Home Mini deviceId: {device_id}")
+    # Configure connection pooling for aiohttp
+    connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
+    
+    async with aiohttp.ClientSession(connector=connector) as session:
+        token = await obtain_token(session, api_key)
+        token_obtained_at = datetime.now(timezone.utc)
+        
+        device_id = await find_home_mini_device_id(session, account_number, token)
+        logging.info("Using Home Mini deviceId: %s", device_id)
 
-        rate_limit = await fetch_rate_limit_info(session, token, debug)
-        pa = (rate_limit or {}).get("pointsAllowanceRateLimit") or {}
-        logging.info(
-            "Rate Limit Summary: PA remainingPoints=%s usedPoints=%s limit=%s ttl=%s isBlocked=%s",
-            pa.get("remainingPoints"),
-            pa.get("usedPoints"),
-            pa.get("limit"),
-            pa.get("ttl"),
-            pa.get("isBlocked"),
-        )
+        rate_limit = await fetch_rate_limit_info(session, token)
+        log_rate_limit(rate_limit)
 
+        # Create InfluxDB client and reusable WriteApi (fixes memory leak)
         influx_client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
+        write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+
+        # Load any cached readings from previous failed writes
+        cache = load_cache()
+        if cache:
+            logging.info("Found %d cached readings, attempting to write...", len(cache))
+            for cached_reading in cache:
+                try:
+                    await write_influx(write_api, influx_org, influx_bucket, cached_reading)
+                except Exception as e:
+                    logging.warning("Failed to write cached reading: %s", e)
+                    break
+            else:
+                # All cached readings written successfully
+                cache = []
+                save_cache(cache, max_cache_size)
+                logging.info("Successfully wrote all cached readings")
 
         last_rate_poll = datetime.now(timezone.utc)
 
-        while True:
+        while not shutdown_event.is_set():
             try:
-                reading = await fetch_telemetry(session, device_id, token, debug)
-                if reading:
-                    await write_influx(influx_client, influx_org, influx_bucket, reading)
-                    logging.info(f"Telemetry: {reading}")
-
+                # Check if token needs refresh (tokens typically expire after 1 hour)
                 now = datetime.now(timezone.utc)
+                if (now - token_obtained_at) >= timedelta(minutes=55):
+                    logging.info("Refreshing authentication token...")
+                    try:
+                        token = await obtain_token(session, api_key)
+                        token_obtained_at = now
+                        logging.info("Token refreshed successfully")
+                    except Exception as e:
+                        logging.error("Failed to refresh token: %s", e)
+
+                reading = await fetch_telemetry(session, device_id, token)
+                if reading:
+                    try:
+                        await write_influx(write_api, influx_org, influx_bucket, reading)
+                        logging.info("Telemetry: %s", reading)
+                        
+                        # If we successfully wrote, try to flush any cached readings
+                        if cache:
+                            for cached_reading in cache[:]:
+                                try:
+                                    await write_influx(write_api, influx_org, influx_bucket, cached_reading)
+                                    cache.remove(cached_reading)
+                                except Exception:
+                                    break
+                            if not cache:
+                                save_cache(cache, max_cache_size)
+                                logging.info("Flushed all cached readings")
+                    except Exception as e:
+                        logging.warning("Failed to write to InfluxDB, caching reading: %s", e)
+                        cache.append(reading)
+                        save_cache(cache, max_cache_size)
+
                 if (now - last_rate_poll) >= timedelta(minutes=10):
-                    rate_limit = await fetch_rate_limit_info(session, token, debug)
-                    pa = (rate_limit or {}).get("pointsAllowanceRateLimit") or {}
-                    logging.info(
-                        "Rate Limit Summary: PA remainingPoints=%s usedPoints=%s limit=%s ttl=%s isBlocked=%s",
-                        pa.get("remainingPoints"),
-                        pa.get("usedPoints"),
-                        pa.get("limit"),
-                        pa.get("ttl"),
-                        pa.get("isBlocked"),
-                    )
+                    rate_limit = await fetch_rate_limit_info(session, token)
+                    log_rate_limit(rate_limit)
                     last_rate_poll = now
 
+            except aiohttp.ClientResponseError as e:
+                if e.status == 401:
+                    logging.warning("Authentication error (401), refreshing token...")
+                    try:
+                        token = await obtain_token(session, api_key)
+                        token_obtained_at = datetime.now(timezone.utc)
+                        logging.info("Token refreshed after 401 error")
+                    except Exception as refresh_error:
+                        logging.error("Failed to refresh token after 401: %s", refresh_error)
+                else:
+                    logging.error("HTTP error in main loop: %s", e)
             except Exception as e:
-                logging.error(f"Main loop error: {e}")
+                logging.error("Main loop error: %s", e)
 
-            await asyncio.sleep(interval)
+            # Use wait with timeout for graceful shutdown support
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=interval)
+                break  # Shutdown requested
+            except asyncio.TimeoutError:
+                pass  # Normal timeout, continue loop
+
+        # Cleanup
+        logging.info("Shutting down...")
+        write_api.close()
+        influx_client.close()
+        
+        # Save any remaining cached readings
+        if cache:
+            save_cache(cache, max_cache_size)
+            logging.info("Saved %d readings to cache for next run", len(cache))
+        
+        logging.info("Octopus Logger stopped")
 
 if __name__ == "__main__":
     asyncio.run(main())

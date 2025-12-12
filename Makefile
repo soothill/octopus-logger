@@ -33,8 +33,7 @@ test:
 	@echo "Validating configuration..."
 	@if [ ! -f config/config.yaml ]; then echo "Error: config/config.yaml not found."; exit 1; fi
 	@if ! grep -q "api_key" config/config.yaml; then echo "Error: Missing octopus.api_key in config/config.yaml"; exit 1; fi
-	@if ! grep -q "mpan" config/config.yaml; then echo "Error: Missing octopus.mpan in config/config.yaml"; exit 1; fi
-	@if ! grep -q "serial_number" config/config.yaml; then echo "Error: Missing octopus.serial_number in config/config.yaml"; exit 1; fi
+	@if ! grep -q "account_number" config/config.yaml; then echo "Error: Missing octopus.account_number in config/config.yaml"; exit 1; fi
 	@if ! grep -q "url" config/config.yaml; then echo "Error: Missing influxdb.url in config/config.yaml"; exit 1; fi
 	@if ! grep -q "token" config/config.yaml; then echo "Error: Missing influxdb.token in config/config.yaml"; exit 1; fi
 	@if ! grep -q "org" config/config.yaml; then echo "Error: Missing influxdb.org in config/config.yaml"; exit 1; fi
