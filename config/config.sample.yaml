@@ -1,0 +1,26 @@
+# Sample configuration for Octopus Logger
+# Copy this file to config/config.yaml and fill in your details.
+
+octopus:
+  api_key: "YOUR_OCTOPUS_API_KEY"        # Obtain from https://octopus.energy/dashboard/developer/
+  mpan: "YOUR_MPAN"                      # Found on your electricity bill or meter
+  serial_number: "YOUR_METER_SERIAL"     # Found on your meter or Octopus dashboard
+
+influxdb:
+  url: "http://localhost:8086"           # InfluxDB instance URL
+  token: "YOUR_INFLUXDB_TOKEN"           # InfluxDB authentication token
+  org: "YOUR_ORG"                        # InfluxDB organization name
+  bucket: "YOUR_BUCKET"                  # InfluxDB bucket name
+
+# Polling interval in seconds (default 30s)
+poll_interval: 30
+
+# Maximum number of cached readings if InfluxDB is unavailable
+max_cache_size: 10000
+
+# Path to local cache file
+cache_file: "cache/pending_readings.json"
+
+# Optional: Local Octopus Home Mini configuration
+home_mini:
+  ip: "192.168.1.100"                    # Local IP address of your Octopus Home Mini

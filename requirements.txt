@@ -1,0 +1,5 @@
+requests
+PyYAML
+influxdb-client
+python-dateutil
+aiohttp
