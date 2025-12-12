@@ -1,15 +1,28 @@
 [Unit]
 Description=Octopus Logger Service
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/home/darren/octopus-logger/.venv/bin/python /home/darren/octopus-logger/src/main.py
 WorkingDirectory=/home/darren/octopus-logger
-Restart=always
-RestartSec=10
+ExecStart=/home/darren/octopus-logger/.venv/bin/python /home/darren/octopus-logger/src/main.py
+
 User=darren
 Environment="PYTHONUNBUFFERED=1"
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Hardening (adjust if you hit permission issues)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+# Allow writes only where needed
+ReadWritePaths=/home/darren/octopus-logger/cache /home/darren/octopus-logger/octopus_logger.log
 
 [Install]
 WantedBy=multi-user.target

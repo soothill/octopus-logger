@@ -1,17 +1,17 @@
 # Octopus Logger
 
-A lightweight Python service that logs real-time power consumption data from your **Octopus Home Mini** via the **Octopus Energy API** into an **InfluxDB** database.  
+A lightweight Python service that logs real-time power consumption data from your **Octopus Home Mini** (via the **Octopus Energy GraphQL API**) into an **InfluxDB** database.
+
 It includes a systemd service for continuous operation and a Makefile for easy setup and management.
 
 ---
 
 ## Features
-- Fetches live consumption data from the Octopus Energy API.
+- Fetches live consumption data from the Octopus Energy GraphQL API.
 - Writes readings to InfluxDB.
 - Caches readings locally if InfluxDB is unavailable.
 - Automatically flushes cached data when InfluxDB reconnects.
 - Runs as a systemd service.
-- Includes a Makefile for installation, testing, and management.
 
 ---
 
@@ -25,33 +25,44 @@ It includes a systemd service for continuous operation and a Makefile for easy s
 ## Getting an Octopus Energy API Key
 1. Log in to your [Octopus Energy account](https://octopus.energy/dashboard/developer/).
 2. Navigate to **Developer > API Keys**.
-3. Generate a new API key (token).
-4. Copy the key and paste it into your `config/config.yaml` file under `octopus.api_key`.
+3. Generate a new API key.
+4. Copy the key and paste it into your `config/config.yaml` under `octopus.api_key`.
 
 ---
 
 ## Configuration
-Edit `config/config.yaml` to include your details:
+Copy the sample config and edit it:
+
+```bash
+cp config/config.sample.yaml config/config.yaml
+```
+
+Example `config/config.yaml`:
 
 ```yaml
 octopus:
-  api_key: "YOUR_OCTOPUS_API_KEY"
-  mpan: "YOUR_MPAN"
-  serial_number: "YOUR_METER_SERIAL"
+  api_key: "YOUR_OCTOPUS_API_KEY"        # Obtain from https://octopus.energy/dashboard/developer/
+  account_number: "A-XXXXXXXX"           # Your Octopus account number (e.g. A-1234ABCD)
 
 influxdb:
-  url: "http://localhost:8086"
-  token: "YOUR_INFLUXDB_TOKEN"
-  org: "YOUR_ORG"
-  bucket: "YOUR_BUCKET"
+  url: "http://localhost:8086"           # InfluxDB instance URL
+  token: "YOUR_INFLUXDB_TOKEN"           # InfluxDB authentication token
+  org: "YOUR_ORG"                        # InfluxDB organization name
+  bucket: "YOUR_BUCKET"                  # InfluxDB bucket name
 
-poll_interval: 30
-cache_file: "cache/pending_readings.json"
+# Polling interval in seconds (default 10s)
+poll_interval: 10
+
+# Maximum number of cached readings if InfluxDB is unavailable (default 10000)
+max_cache_size: 10000
+
+# Enable debug logging (default false)
+debug: false
 ```
 
 **Notes:**
-- The default polling interval is **30 seconds**, which complies with Octopus API rate limits.
-- You can adjust this interval if needed, but avoid setting it below 10 seconds.
+- Default polling interval is **10 seconds**.
+- Avoid setting it too low to stay within Octopus API rate limits.
 
 ---
 
@@ -63,9 +74,10 @@ make install
 ```
 
 This will:
-- Install dependencies.
-- Copy the systemd service file.
-- Enable and start the service.
+- Create a virtualenv (`.venv`)
+- Install dependencies
+- Copy the systemd service file
+- Enable and start the service
 
 ---
 
@@ -76,21 +88,20 @@ To run the logger once (without installing as a service):
 make test
 ```
 
-This will execute the script once to verify configuration and connectivity.
-
 ---
 
 ## Managing the Service
 ```bash
-make start   # Start the service
-make stop    # Stop the service
-make uninstall  # Remove the service
+make start
+make stop
+make uninstall
 ```
 
 ---
 
 ## Logs
 View logs using:
+
 ```bash
 journalctl -u octopus-logger.service -f
 ```
@@ -98,9 +109,9 @@ journalctl -u octopus-logger.service -f
 ---
 
 ## Troubleshooting
-- Ensure your API key, MPAN, and meter serial are correct.
+- Ensure your `octopus.api_key` and `octopus.account_number` are correct.
 - Verify InfluxDB is running and accessible.
-- Check the cache file (`cache/pending_readings.json`) for unsent readings if InfluxDB is down.
+- If InfluxDB is down, readings will be queued in `cache/pending_readings.json` and flushed once writes succeed again.
 
 ---
 
