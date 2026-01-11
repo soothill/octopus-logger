@@ -272,18 +272,40 @@ def log_rate_limit(rate_limit: Dict[str, Any]) -> None:
 # INFLUX WRITE (using reusable WriteApi)
 ############################################################
 
-def _reading_to_point(reading: Dict[str, Any]) -> Point:
+def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
+    """Safely convert a value to float, returning default if conversion fails."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError) as e:
+        logging.warning("Failed to convert value to float: %r - %s", value, e)
+        return default
+
+
+def _reading_to_point(reading: Dict[str, Any]) -> Optional[Point]:
+    """Convert a reading dict to an InfluxDB Point with numeric power field.
+    
+    Returns None if the value cannot be converted to a valid float.
+    """
+    power_value = _safe_float(reading.get("value"))
+    if power_value is None:
+        logging.warning("Skipping reading with invalid power value: %r", reading.get("value"))
+        return None
+    
     return (
         Point("power")
-        .field("value", reading["value"])
+        .field("power_numeric", power_value)
         .time(reading["timestamp"], WritePrecision.S)
     )
 
 
 def write_influx_sync(write_api, org: str, bucket: str, readings: List[Dict[str, Any]]) -> None:
     """Synchronous InfluxDB write for one or many readings."""
-    points = [_reading_to_point(r) for r in readings]
-    write_api.write(bucket=bucket, org=org, record=points)
+    # Filter out None points (readings with invalid values)
+    points = [p for p in (_reading_to_point(r) for r in readings) if p is not None]
+    if points:
+        write_api.write(bucket=bucket, org=org, record=points)
 
 
 async def write_influx(write_api, org: str, bucket: str, readings: List[Dict[str, Any]]) -> None:

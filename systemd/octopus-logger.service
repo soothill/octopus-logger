@@ -22,7 +22,7 @@ ProtectSystem=strict
 ProtectHome=read-only
 
 # Allow writes only where needed
-ReadWritePaths=/home/darren/octopus-logger/cache /home/darren/octopus-logger/octopus_logger.log
+ReadWritePaths=/home/darren/octopus-logger/cache /home/darren/octopus-logger
 
 [Install]
 WantedBy=multi-user.target

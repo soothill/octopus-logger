@@ -8,7 +8,7 @@ It includes a systemd service for continuous operation and a Makefile for easy s
 
 ## Features
 - Fetches live consumption data from the Octopus Energy GraphQL API.
-- Writes readings to InfluxDB.
+- Writes readings to InfluxDB with numeric `power_numeric` field for mathematical operations.
 - Caches readings locally if InfluxDB is unavailable.
 - Automatically flushes cached data when InfluxDB reconnects.
 - Runs as a systemd service.
@@ -119,6 +119,55 @@ View logs using:
 ```bash
 journalctl -u octopus-logger.service -f
 ```
+
+---
+
+## InfluxDB Data Schema
+
+Data is written to the `power` measurement with the following field:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `power_numeric` | float | Power demand in watts (numeric for mathematical operations) |
+
+### Example Flux Queries
+
+```flux
+# Get average power over last hour
+from(bucket: "your_bucket")
+  |> range(start: -1h)
+  |> filter(fn: (r) => r._measurement == "power")
+  |> filter(fn: (r) => r._field == "power_numeric")
+  |> mean()
+
+# Calculate total energy consumption (sum)
+from(bucket: "your_bucket")
+  |> range(start: -24h)
+  |> filter(fn: (r) => r._measurement == "power")
+  |> filter(fn: (r) => r._field == "power_numeric")
+  |> sum()
+```
+
+---
+
+## Migrating Existing Data
+
+If you have existing data with the old `value` field (stored as strings), you can migrate it to the new numeric `power_numeric` field:
+
+```bash
+# Preview what will be migrated (dry run)
+python scripts/migrate_power_to_numeric.py --dry-run
+
+# Run the actual migration
+python scripts/migrate_power_to_numeric.py
+```
+
+The migration script:
+- Reads all existing records from the `power` measurement
+- Converts `value` fields to float
+- Writes new `power_numeric` fields with the numeric values
+- Preserves original timestamps
+- Skips any records that cannot be converted to valid numbers
 
 ---
 
